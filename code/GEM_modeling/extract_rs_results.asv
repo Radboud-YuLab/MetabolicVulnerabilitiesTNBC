@@ -1,0 +1,169 @@
+%% Extract data for figures 3 and 4
+% written by: Cyriel Huijer
+% Last updated: 22 June 2026
+
+% set to correct code folder
+cd /code
+% load all data
+clear
+clc
+
+load("data/modeling/output/20251217_models_constrained.mat")
+lb = readtable("data/exchange_fluxes/exch_fluxes_3D/for_modeling/20251217_lb.csv");
+conditions = lb.Properties.VariableNames(2:end);
+
+% Folder containing .mat files
+folderPath = 'data/modeling/output/rs_results';
+
+% List all .mat files in the folder
+fileList = dir(fullfile(folderPath, '*.mat'));
+nFiles = numel(fileList);
+
+% Preallocate cell array
+solutions = cell(nFiles, 1);
+
+% Loop through all files
+for i = 1:nFiles
+    fileName = fullfile(folderPath, fileList(i).name);  
+    %disp(fileName)
+    % Load the file
+    S = load(fileName);  % assumes variable inside is sol_i    
+    % Store in cell array
+    solutions{i} = S.sol_i;
+end
+
+
+clear lb sol_i S nFiles folderPath fileName fileList
+
+%% Calculate mean solutions and plot PCA
+
+for i = 1:numel(solutions)
+    full_solutions{i} = full(solutions{i});
+    mean_solution{i} = mean(full_solutions{i},2);
+end
+
+% Preallocate a matrix: rows = reactions, cols = conditions
+nRxns = size(mean_solution{1}, 1);  % number of reactions
+nConditions = numel(mean_solution);
+
+mean_matrix = zeros(nRxns, nConditions);
+
+% Fill the matrix
+for i = 1:nConditions
+    mean_matrix(:, i) = mean_solution{i};
+end
+
+% Convert to table
+mean_table = array2table(mean_matrix, 'VariableNames', conditions);
+% save table to for plotting in R
+%writetable(mean_table, 'data/modeling/output/20251217_simulated_mean_fluxes_per_condition.csv');
+
+% Convert table to matrix (reactions × conditions)
+data_matrix = table2array(mean_table);  % reactions × conditions
+
+% Transpose: columns = features (reactions), rows = samples (conditions)
+data_matrix = data_matrix';  % now: conditions × reactions
+
+% Perform PCA
+[coeff, score, ~, ~, explained] = pca(data_matrix);
+
+% Plot PC1 vs PC2
+figure;
+scatter(score(:,1), score(:,2), 100, 'filled'); % each point = one condition
+
+% Label points with condition names
+text(score(:,1), score(:,2), conditions, 'VerticalAlignment','bottom','HorizontalAlignment','right');
+
+xlabel(sprintf('PC1 (%.2f%% Variance Explained)', explained(1)));
+ylabel(sprintf('PC2 (%.2f%% Variance Explained)', explained(2)));
+title('PCA of Mean Fluxes per Condition');
+grid on;
+
+clear coeff data_matrix explained mean_matrix mean_solution nConditions nRxns score full_solutions i
+
+%% Get data for barplot subsystems and heatmap (Fig 3B-C)
+
+% set output for excel files
+out_dir_root = "data/modeling/output/alt_subsystems";
+% for fig 4
+
+res_175 = evaluateSampling_updated(models{7}, models{10}, solutions{7}, solutions{10}, 0.01,0,out_dir_root);
+filter_rows = abs(res_175.mean_sample_TP53R175H_MYC_0) > 1e-5 & abs(res_175.mean_sample_TP53R175H_MYC_1000) > 1e-5 & abs(res_175.raw_diff) > 0.2;
+res_175 = res_175(filter_rows, :);
+alt_subs_175 = countAltSubsystems(models{7},models{10},res_175,out_dir_root);
+
+res_248 = evaluateSampling_updated(models{11}, models{14}, solutions{11}, solutions{14}, 0.01,0,out_dir_root);
+filter_rows = abs(res_248.mean_sample_TP53R248Q_MYC_0) > 1e-5 & abs(res_248.mean_sample_TP53R248Q_MYC_1000) > 1e-5 & abs(res_248.raw_diff) > 0.2;
+res_248 = res_248(filter_rows, :);
+alt_subs_248 = countAltSubsystems(models{11},models{14},res_248,out_dir_root);
+
+res_273 = evaluateSampling_updated(models{15}, models{18}, solutions{15}, solutions{18}, 0.01,0,out_dir_root);
+filter_rows = abs(res_273.mean_sample_TP53R273H_MYC_0) > 1e-5 & abs(res_273.mean_sample_TP53R273H_MYC_1000) > 1e-5 & abs(res_273.raw_diff) > 0.2;
+res_273 = res_273(filter_rows, :);
+alt_subs_273 = countAltSubsystems(models{15},models{18},res_273,out_dir_root);
+
+res_myc = evaluateSampling_updated(models{3}, models{6}, solutions{3}, solutions{6}, 0.01,0,out_dir_root);
+filter_rows = abs(res_myc.mean_sample_MYC_0) > 1e-5 & abs(res_myc.mean_sample_MYC_1000) > 1e-5 & abs(res_myc.raw_diff) > 0.2;
+res_myc = res_myc(filter_rows, :);
+alt_subs_myc = countAltSubsystems(models{15},models{18},res_myc,out_dir_root);
+
+res_ev = evaluateSampling_updated(models{1}, models{2}, solutions{1}, solutions{2}, 0.01,0,out_dir_root);
+filter_rows = abs(res_ev.mean_sample_EV_0) > 1e-5 & abs(res_ev.mean_sample_EV_1000) > 1e-5 & abs(res_ev.raw_diff) > 0.2;
+res_ev = res_ev(filter_rows, :);
+alt_subs_ev = countAltSubsystems(models{1},models{2},res_ev,out_dir_root);
+
+
+alt_tables = {alt_subs_175, alt_subs_248, alt_subs_273,alt_subs_myc,alt_subs_ev};
+
+% Filter subsystems with less than 5 total rxns
+for i = 1:numel(alt_tables)
+    results = alt_tables{i};
+    alt_tables{i} = results(results.counts_total > 5, :);
+end
+
+colNames = {'TP53R175H_MYC', 'TP53R248Q_MYC', 'TP53R273H_MYC', 'MYC','EV'};
+
+alt_subs_175 = alt_tables{1};
+alt_subs_248 = alt_tables{2};
+alt_subs_273 = alt_tables{3};
+alt_subs_myc = alt_tables{4};
+alt_subs_ev = alt_tables{5};
+
+allSubsystems = unique(vertcat( ...
+    alt_subs_175.subsytem, ...
+    alt_subs_248.subsytem, ...
+    alt_subs_273.subsytem, ...
+    alt_subs_myc.subsytem, ...
+    alt_subs_ev.subsytem));
+
+combined_table = table(allSubsystems, 'VariableNames', {'subsytem'});
+
+for i = 1:numel(colNames)
+    combined_table.(colNames{i}) = zeros(height(combined_table), 1);
+end
+
+for i = 1:numel(alt_tables)
+    T = alt_tables{i};
+    [isMatch, idx] = ismember(T.subsytem, combined_table.subsytem);
+    combined_table{idx(isMatch), colNames{i}} = T.pct_rxn_change(isMatch);
+end
+
+% data for fig 3B
+%writetable(combined_table, 'data/modeling/output/20251218_pct_changed_subsystems.csv');
+
+%% Get rxns and mean_fluxes
+all_rxns = [res_ev.rxn; res_175.rxn; res_248.rxn; res_273.rxn; res_myc.rxn];
+all_rxns = unique(all_rxns);
+
+[~, all_rxns_idx] = ismember(all_rxns,models{1}.rxns);
+
+mean_table.rxn = models{1}.rxns;
+mean_table.subsystem = models{1}.subSystems;
+
+mean_table_filtered = mean_table(all_rxns_idx, :);
+% data for fig 3C
+%writetable(mean_table_filtered, 'data/modeling/output/20251218_mean_rxns_heatmap.csv');
+
+
+
+
